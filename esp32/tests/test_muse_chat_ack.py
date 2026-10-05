@@ -64,3 +64,47 @@ int main() {
                             '-Wextra', '-Werror', '-I'+str(cjson), str(path / 'test.cpp'),
                             str(path / 'cjson.o'), '-o', str(path / 'test')], check=True)
             subprocess.run([str(path / 'test')], check=True)
+
+    def test_authoritative_final_text_includes_same_length_corrections(self):
+        source = (ROOT / 'components/muse/muse_chat_session.cpp').read_text()
+        start = source.index('static void message_done(int i, const char *final_text)')
+        end = source.index('static const char *msg_id(', start)
+        harness = r'''
+#include <cassert>
+#include <cstring>
+#include <cstddef>
+struct msg_t {bool done; size_t len; int tts; char id[16];};
+static struct {msg_t msgs[1]; bool text;} s_turn;
+static int finals, dones;
+static char final_seen[128];
+#define M_DONE 1
+#define TTS_NONE 0
+#define TTS_QUEUED 1
+#define ESP_LOGI(...) ((void)0)
+static void mark(int) {}
+static void append_text(msg_t &, const char *) {}
+static void muse_hatch_console(const char *type, const char *text, const char *, ...) {
+    if (!strcmp(type,"final")) { finals++; strcpy(final_seen,text); }
+    if (!strcmp(type,"message_done")) dones++;
+}
+''' + source[start:end] + r'''
+int main() {
+    s_turn.text=true; s_turn.msgs[0].len=strlen("TRIGGR_ACK old");
+    message_done(0,"TRIGGR_ACK new");
+    assert(finals==1 && dones==1 && !strcmp(final_seen,"TRIGGR_ACK new"));
+    message_done(0,"duplicate");assert(finals==1 && dones==1);
+    s_turn.msgs[0].done=false;message_done(0,nullptr);
+    assert(finals==1 && dones==2);
+    s_turn.msgs[0].done=false;message_done(0,"a longer final reply");
+    assert(finals==2 && dones==3 && !strcmp(final_seen,"a longer final reply"));
+    s_turn.msgs[0].done=false;message_done(0,"");
+    assert(finals==3 && dones==4 && !final_seen[0]);
+}
+'''
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            (path / 'test.cpp').write_text(harness)
+            subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall',
+                            '-Wextra', '-Werror', str(path / 'test.cpp'),
+                            '-o', str(path / 'test')], check=True)
+            subprocess.run([str(path / 'test')], check=True)

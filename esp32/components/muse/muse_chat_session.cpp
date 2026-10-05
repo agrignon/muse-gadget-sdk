@@ -1368,9 +1368,9 @@ static void message_done(int i, const char *final_text)
     m.done = true;
     mark(M_DONE);
     if (s_turn.text) {
-        /* The whole text if the pieces didn't add up to it (a line skipped, say): the reader uses it instead. */
+        /* Always deliver authoritative final text, including same-length corrections. */
         size_t n = m.len;
-        if (final_text && final_text[0] && strlen(final_text) != m.len) {
+        if (final_text) {
             n = strlen(final_text);
             muse_hatch_console("final", final_text, "\"msg\":%d", i);
         }
