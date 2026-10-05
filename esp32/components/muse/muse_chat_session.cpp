@@ -1487,6 +1487,11 @@ static void on_chat_ack(stream_t *s)
     mark(M_ACK);
     ESP_LOGI(TAG, "chat/stream ack: user message %s", s_turn.user_ids[0]);
     cJSON_Delete(root);
+    // Typed-turn observers distinguish a server receipt from the local "sent" event.
+    // A successful stream without a message id is insufficient receipt evidence.
+    if (s_turn.text && s_turn.user_ids[0][0]) {
+        muse_hatch_console("ack", nullptr, nullptr);
+    }
     emit(MUSE_HATCH_EV_SENT, nullptr);
 }
 
