@@ -28,7 +28,22 @@ int main() {
     assert(!muse_chat_add_session(body,long_id));
     assert(muse_chat_add_session(body,"side-1"));
     assert(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(body,"session_id")),"side-1"));
+    assert(!strcmp(muse_chat_session_state(body,"side-1"),"match"));
+    assert(!strcmp(muse_chat_session_state(body,"side-2"),"other"));
     cJSON_Delete(body);
+    const char *samples[] = {"{}", "{\"session_id\":null}", "{\"session_id\":42}", "{\"session_id\":\"\"}"};
+    const char *states[] = {"missing", "null", "invalid", "empty"};
+    for (int i=0;i<4;i++) {
+        cJSON *obj=cJSON_Parse(samples[i]);
+        assert(!strcmp(muse_chat_session_state(obj,"side-1"),states[i]));
+        cJSON_Delete(obj);
+    }
+    cJSON *event=cJSON_Parse("{\"event\":\"delta.message_done\"}");
+    assert(!strcmp(muse_chat_event_kind(event),"delta.message_done"));
+    cJSON_Delete(event);
+    event=cJSON_Parse("{\"event\":\"private arbitrary value\"}");
+    assert(!strcmp(muse_chat_event_kind(event),"other"));
+    cJSON_Delete(event);
     check("{}",false,false);             // no guessed subscription scope
     check("{}",true,true);               // known message/parent can correlate
     check("{\"session_id\":\"side-1\"}",false,true); // before ACK with session

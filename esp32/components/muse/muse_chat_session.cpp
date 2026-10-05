@@ -1500,10 +1500,18 @@ static void on_event(cJSON *line)
                       (is_user_id(parent) || find_msg(parent) >= 0)) ||
                      (id && find_msg(id) >= 0);
         bool accepted = muse_chat_route_accept(line, payload, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID, known);
-        if (s_route_logs++ < 16) {
-            ESP_LOGI(TAG, "side-chat route: envelope_session=%d payload_session=%d parent=%d known=%d accepted=%d",
-                     cJSON_HasObjectItem(line, "session_id"), cJSON_HasObjectItem(payload, "session_id"),
-                     parent && parent[0], known, accepted);
+        if (s_route_logs++ < 64) {
+            cJSON *seq = cJSON_GetObjectItem(line, "seq");
+            bool stale = cJSON_IsNumber(seq) && seq->valuedouble > 0 && seq->valuedouble <= s_last_seq;
+            bool parent_other = parent && parent[0] && s_turn.acked &&
+                                !is_user_id(parent) && find_msg(parent) < 0;
+            ESP_LOGI(TAG, "side-chat route: event=%s envelope=%s payload=%s id=%d parent=%d known=%d accepted=%d stale=%d parent_other=%d full=%d",
+                     muse_chat_event_kind(line),
+                     muse_chat_session_state(line, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID),
+                     muse_chat_session_state(payload, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID),
+                     id != nullptr, parent && parent[0], known, accepted, stale, parent_other,
+                     s_turn.nmsgs == MAX_MSGS);
+            if (s_route_logs == 64) ESP_LOGI(TAG, "side-chat route: diagnostic limit reached");
         }
         if (!accepted) return;
     }
@@ -1580,6 +1588,13 @@ static void on_chat_ack(stream_t *s)
     cJSON *root = cJSON_Parse(s->line);
     cJSON *result = cJSON_GetObjectItem(root, "result");
     cJSON *obj = cJSON_IsObject(result) ? result : root;
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    if (s_turn.text) {
+        ESP_LOGI(TAG, "side-chat ack route: envelope=%s result=%s",
+                 muse_chat_session_state(root, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID),
+                 muse_chat_session_state(result, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID));
+    }
+#endif
     const char *keys[] = { "message_id", "reply_to_message_id" };
     for (int k = 0; k < 2; k++) {
         const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(obj, keys[k]));

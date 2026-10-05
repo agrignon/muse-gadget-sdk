@@ -34,3 +34,25 @@ static inline bool muse_chat_add_session(cJSON *body, const char *id)
 {
     return muse_chat_session_valid(id) && cJSON_AddStringToObject(body, "session_id", id);
 }
+
+/* Diagnostic labels are fixed strings: never log arbitrary payload values. */
+static inline const char *muse_chat_session_state(cJSON *object, const char *wanted)
+{
+    cJSON *field = cJSON_GetObjectItemCaseSensitive(object, "session_id");
+    if (!field) return "missing";
+    if (cJSON_IsNull(field)) return "null";
+    const char *id = cJSON_GetStringValue(field);
+    if (!id) return "invalid";
+    if (!id[0]) return "empty";
+    return !strcmp(id, wanted) ? "match" : "other";
+}
+
+static inline const char *muse_chat_event_kind(cJSON *line)
+{
+    const char *event = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(line, "event"));
+    if (!event) return "missing";
+    const char *known[] = {"agent.status", "task.status", "delta.message_start",
+        "delta.text_append", "delta.message_done", "message.assistant", "message.user"};
+    for (const char *name : known) if (!strcmp(name, event)) return name;
+    return "other";
+}
