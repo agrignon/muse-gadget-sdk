@@ -28,12 +28,13 @@ menu "ESP32 Device SDK"
         depends on TRIGGR_TEXT_CHAT
         default n
         help
-            Experimental side-chat routing. Sends version-1 receipt probes only;
+            Experimental side-chat routing on the registered gadget connection.
+            Sends version-1 receipt probes only;
             activity logging is disabled. No fallback or automatic resend.
 
     config TRIGGR_SIDE_CHAT_SESSION_ID
         string "Triggr probe chat session ID (reuse across builds)"
-        depends on TRIGGR_SIDE_CHAT_PROBE
+        depends on TRIGGR_TEXT_CHAT
         default ""
         help
             Set one UUID for this gadget's dedicated chat. Keep it unchanged

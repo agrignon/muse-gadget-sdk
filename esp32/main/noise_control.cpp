@@ -152,10 +152,11 @@ static std::atomic<bool> s_power_save{false};
 // registered on this same Noise connection (see ingress-rev-proxy
 // link_tunnel_authorized_by_daemon). Opening earlier races the registration and
 // draws a 403 that would otherwise wait out the tunnel reopen interval (~5s+).
-// Session-task-owned: written before the event loop, read/reset within it.
+// Registration request bookkeeping is session-task-owned. The atomic success
+// flag is also read by the Triggr probe sender.
 static char s_register_req_id[40] = {0};
 static bool s_register_acked = false;
-static bool s_heartbeat_registered = false;
+static std::atomic<bool> s_heartbeat_registered{false};
 static TaskHandle_t s_task = nullptr;
 
 #define NOISE_CTRL_STACK 12288
@@ -898,8 +899,8 @@ static bool tunnel_send_body(void *vctx, const uint8_t *data, size_t len) {
 
 // ---- Extra daemon requests (noise_ctrl_req_*) --------------------------------
 
-// Only Muse opens these; Link-only gateways get the empty stubs below.
-#if CONFIG_MUSE_ENABLED
+// Muse and the opt-in Triggr probe open these; other Link-only gateways use stubs.
+#if CONFIG_MUSE_ENABLED || CONFIG_TRIGGR_SIDE_CHAT_PROBE
 
 // Stream ids from here up belong to these requests; lower ids are Link's own.
 #define REQ_STREAM_BASE 16
@@ -984,6 +985,13 @@ static void req_end_all(void) {
 
 static bool req_open(esp_tls_t *tls, ClientSession &session, req_op &op,
                      uint8_t *svc_scratch, uint8_t *env_scratch, uint8_t *ws_buf) {
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    // Recheck on the owning task: registration may have changed since enqueue.
+    if (!s_heartbeat_registered) {
+        req_drop(op);
+        return true;
+    }
+#endif
     req_stream *slot = req_find(0);
     if (!slot) {
         ESP_LOGW(TAG, "request %lld: no free stream", (long long)op.id);
@@ -2154,7 +2162,7 @@ static session_result_t run_session(stack_monitor_t *stack) {
             }
         }
 
-#if CONFIG_MUSE_ENABLED
+#if CONFIG_MUSE_ENABLED || CONFIG_TRIGGR_SIDE_CHAT_PROBE
         {
             bool sent = false;
             if (!req_pump_tx(tls, session, svc_scratch, env_scratch, ws_buf, &sent)) {
@@ -2229,6 +2237,7 @@ static session_result_t run_session(stack_monitor_t *stack) {
     }
 
     s_connected = false;
+    s_heartbeat_registered = false;
     req_end_all();
     noise_tunnel_on_session_down();
     ESP_LOGI(TAG, "session ending (rx idle %llus at teardown)",
@@ -2381,6 +2390,11 @@ extern "C" void noise_ctrl_disconnect(void) {
     xSemaphoreGive(s_connect_mutex);
 }
 
+extern "C" const char *noise_ctrl_registered_device_id(void) {
+    // node_id is initialized once before tasks start and never changes.
+    return s_heartbeat_registered.load() ? s_node_id : nullptr;
+}
+
 extern "C" bool noise_ctrl_is_connected(void) {
     return s_connected;
 }
@@ -2399,7 +2413,7 @@ extern "C" void noise_ctrl_send_command_result(
     queue_result(session_generation, request_id, result);
 }
 
-#if CONFIG_MUSE_ENABLED
+#if CONFIG_MUSE_ENABLED || CONFIG_TRIGGR_SIDE_CHAT_PROBE
 extern "C" int64_t noise_ctrl_req_open(const char *verb, const char *path,
                                        const char *const *headers, bool end_body,
                                        noise_ctrl_req_cb cb, void *ctx) {

@@ -59,6 +59,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
@@ -800,7 +801,56 @@ static bool resolve_vm(char *err, size_t err_cap)
 
 #if CONFIG_TRIGGR_SIDE_CHAT_PROBE
 #include "muse_chat_route.h"
+#include "muse_chat_probe_rx.h"
+#include "../../main/noise_control.h"
 static unsigned s_route_logs;
+static SemaphoreHandle_t s_probe_lock;
+static muse_chat_probe_rx s_probe_rx;
+static int64_t s_probe_id; // chat-task-owned; never a stream on s_conn
+
+// Callback context is a generation value, never a pointer into a turn. The
+// accumulator and lock live for the firmware lifetime, including after cancel.
+static void probe_response(void *ctx, int status, const uint8_t *data, size_t len, bool end)
+{
+    xSemaphoreTake(s_probe_lock, portMAX_DELAY);
+    s_probe_rx.feed(reinterpret_cast<uintptr_t>(ctx), status, data, len, end);
+    xSemaphoreGive(s_probe_lock);
+}
+
+static void cancel_probe(void)
+{
+    if (!s_probe_lock) return;
+    xSemaphoreTake(s_probe_lock, portMAX_DELAY);
+    s_probe_rx.reset(); // invalidate callbacks before queueing cancellation
+    xSemaphoreGive(s_probe_lock);
+    if (s_probe_id) noise_ctrl_req_cancel(s_probe_id);
+    s_probe_id = 0;
+}
+
+static bool send_probe(const char *json)
+{
+    if (!s_probe_lock || !noise_ctrl_registered_device_id()) return false;
+    xSemaphoreTake(s_probe_lock, portMAX_DELAY);
+    uintptr_t gen = s_probe_rx.reset();
+    xSemaphoreGive(s_probe_lock);
+    char request_id[40];
+    snprintf(request_id, sizeof(request_id), "triggr-%08lx-%08lx",
+             (unsigned long)esp_random(), (unsigned long)esp_random());
+    const char *headers[] = {"Content-Type", "application/json", "x-app-id", "musegadget",
+                             "x-request-id", request_id, nullptr};
+    s_probe_id = noise_ctrl_req_open("POST", "/chat/stream", headers, false,
+                                     probe_response, reinterpret_cast<void *>(gen));
+    if (!s_probe_id) return false;
+    size_t len = strlen(json);
+    for (size_t off = 0; off < len; off += CHAT_PART) {
+        size_t n = len - off < CHAT_PART ? len - off : CHAT_PART;
+        if (!noise_ctrl_req_send(s_probe_id, json + off, n, off + n == len, 200)) {
+            cancel_probe();
+            return false;
+        }
+    }
+    return true;
+}
 #endif
 
 static bool open_subscription(void)
@@ -945,6 +995,9 @@ static size_t resample(resampler_t *r, const int16_t *in, size_t n, int16_t *out
 
 static void turn_reset_streams(void)
 {
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    cancel_probe();
+#endif
     send_reset(s_turn.dict_id);
     send_reset(s_turn.chat_id);
     for (auto &s : s_streams) {
@@ -1179,15 +1232,32 @@ static void send_chat(const char *text, const char *modality)
     cJSON_AddStringToObject(body, "message", text);
     cJSON_AddStringToObject(body, "output_modality", modality);
 #if CONFIG_TRIGGR_SIDE_CHAT_PROBE
-    if (s_turn.text && !muse_chat_add_session(body, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID)) {
+    const char *device_id = noise_ctrl_registered_device_id();
+    if (s_turn.text && (!device_id || !device_id[0] ||
+        !muse_chat_add_session(body, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID) ||
+        !cJSON_AddStringToObject(body, "device_id", device_id))) {
         cJSON_Delete(body);
-        turn_fail("INVALID SIDE CHAT CONFIGURATION");
+        turn_fail("SIDE CHAT CONFIG INVALID OR GADGET NOT REGISTERED");
         return;
     }
 #endif
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
     size_t len = json ? strlen(json) : 0;
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    if (s_turn.text) {
+        bool ok = json && send_probe(json);
+        cJSON_free(json);
+        if (!ok) {
+            turn_fail("REGISTERED GADGET SEND FAILED; OUTCOME UNKNOWN");
+            return;
+        }
+        s_turn.body_sent = len;
+        s_turn.chat_us = s_turn.last_event_us = now_us();
+        s_turn.phase = P_WAIT_REPLY;
+        return;
+    }
+#endif
     bool whole = len <= CHAT_PART;
     s_turn.chat_id = json ? open_stream(K_CHAT, "POST", "/chat/stream", "application/json", nullptr,
                                         whole ? json : nullptr, whole) : 0;
@@ -1235,7 +1305,7 @@ static void text_begin(const char *text)
     }
 #if CONFIG_TRIGGR_SIDE_CHAT_PROBE
     s_route_logs = 0;
-    ESP_LOGI(TAG, "side-chat probe session=%s (subscription scope unchanged)", CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID);
+    ESP_LOGI(TAG, "side-chat probe session=%s (registered gadget send; subscription unchanged)", CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID);
 #endif
     ESP_LOGI(TAG, "typed turn: %u bytes", (unsigned)strlen(text));
     send_chat(text, "text");
@@ -1528,6 +1598,36 @@ static void on_chat_ack(stream_t *s)
     }
     emit(MUSE_HATCH_EV_SENT, nullptr);
 }
+
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+// Consume only on the chat task, before subscription events. No callback ever
+// accesses s_turn, and old generations cannot acknowledge a newer request.
+static void poll_probe(void)
+{
+    if (!s_probe_id || !s_probe_lock) return;
+    xSemaphoreTake(s_probe_lock, portMAX_DELAY);
+    if (!s_probe_rx.done) {
+        xSemaphoreGive(s_probe_lock);
+        return;
+    }
+    bool ok = s_probe_rx.ok();
+    size_t len = s_probe_rx.len;
+    char *body = ok ? static_cast<char *>(malloc(len + 1)) : nullptr;
+    if (body) memcpy(body, s_probe_rx.body, len + 1);
+    s_probe_rx.reset();
+    xSemaphoreGive(s_probe_lock);
+    s_probe_id = 0;
+    if (!body) {
+        turn_fail("REGISTERED GADGET RESPONSE FAILED; OUTCOME UNKNOWN");
+        return;
+    }
+    stream_t response{};
+    response.line = body;
+    response.len = len;
+    on_chat_ack(&response);
+    free(body);
+}
+#endif
 
 /* ---- Turn: speech ---- */
 
@@ -1979,6 +2079,9 @@ static void hatch_task(void *arg)
                 handle(cmd);
             }
         }
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+        poll_probe();
+#endif
         if (!s_connected) {
             if (!muse_wifi_connected()) {
                 s_auto_next_us = 0;
@@ -2062,6 +2165,13 @@ extern "C" void muse_hatch_start(void)
     }
     cJSON_Hooks hooks = { json_alloc, heap_caps_free };
     cJSON_InitHooks(&hooks);
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    s_probe_lock = xSemaphoreCreateMutex();
+    if (!s_probe_lock) {
+        ESP_LOGE(TAG, "probe lock allocation failed");
+        return;
+    }
+#endif
     s_cmds = xQueueCreate(16, sizeof(cmd_t));
     s_events = xQueueCreate(16, sizeof(ev_t));
     s_in = xStreamBufferCreateWithCaps(IN_BYTES, 1, MALLOC_CAP_SPIRAM);
