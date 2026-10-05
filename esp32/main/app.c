@@ -44,6 +44,9 @@
 
 #include "identity.h"
 #include "config_store.h"
+#if CONFIG_TRIGGR_TEXT_CHAT
+#include "triggr.h"
+#endif
 #include "wifi_mgr.h"
 #include "wifi_known.h"
 #include "customer_product_info.h"
@@ -2117,7 +2120,11 @@ static void on_button_short_press(void) {
 }
 
 static void on_button_double_press(void) {
+#if CONFIG_TRIGGR_TEXT_CHAT
+    triggr_double_press();
+#else
     ESP_LOGI(TAG, "button double-press ignored");
+#endif
 }
 
 static void on_button_long_press(void) {
@@ -2231,7 +2238,7 @@ bool app_wifi_nap(void) {
 }
 #endif  // CONFIG_MUSE_ENABLED
 
-#if CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_VOICE
+#if CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_VOICE || CONFIG_TRIGGR_TEXT_CHAT
 // Muse's and the voice board's own Hatch session reach the VM with these.
 typedef struct {
     const char *want_vm;
@@ -2602,6 +2609,9 @@ void app_run(void) {
     }
 
     s_setup_stage = setup_complete ? "done" : "idle";
+#if CONFIG_TRIGGR_TEXT_CHAT
+    triggr_init();
+#endif
 #if CONFIG_MUSE_ENABLED
     // Muse's talk button confirms pairing and its menu resets setup; the Link
     // button GPIO may be a display or codec pin on these boards.

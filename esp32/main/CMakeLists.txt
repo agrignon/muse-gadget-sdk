@@ -63,6 +63,7 @@ set(GADGET_REQUIRES
     mbedtls
     efuse
     muse
+    triggr
     # The voice board's. Requirements are resolved before the configuration
     # is loaded, so this is unconditional; unused code is not linked.
     esp_driver_i2s
@@ -96,6 +97,10 @@ if(CONFIG_HOMEHUB_VOICE)
         "voice_muse_chat.c"
         "voice_player.c"
     )
+endif()
+
+if(CONFIG_TRIGGR_TEXT_CHAT)
+    list(APPEND GADGET_SRCS "voice_muse_chat.c")
 endif()
 
 idf_component_register(

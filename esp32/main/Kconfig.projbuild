@@ -14,6 +14,15 @@
 
 menu "ESP32 Device SDK"
 
+    config TRIGGR_TEXT_CHAT
+        bool "Triggr screenless double-press chat test"
+        depends on SPIRAM && !MUSE_ENABLED && !HOMEHUB_VOICE
+        default n
+        help
+            Reuse Muse typed chat with the paired account, without display
+            or audio hardware. Single-press pairing and long-hold reset remain.
+
+
     config GADGET_PRODUCT_NAME
         string "Human-visible product name for log messages"
         default "Muse Gadget"

@@ -88,7 +88,7 @@ if(CONFIG_MUSE_ENABLED)
     elseif(CONFIG_MUSE_BOARD_FNK0104B)
         list(APPEND srcs "boards/board_fnk0104b.c")
     endif()
-elseif(CONFIG_HOMEHUB_VOICE)
+elseif(CONFIG_HOMEHUB_VOICE OR CONFIG_TRIGGR_TEXT_CHAT)
     # The Voice PE board uses just the Hatch voice session; the project's main/
     # voice_muse_chat.c stands in for the Muse settings, Wi-Fi and Link hooks.
     list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp" "muse_chat_text.c" "muse_text.c")

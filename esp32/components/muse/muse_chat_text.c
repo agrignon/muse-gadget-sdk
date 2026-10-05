@@ -18,6 +18,9 @@
  * transcript text cut to fit the caption. Also the serial console's "@chat"
  * lines for typed turns. */
 #include "muse_chat_priv.h"
+#ifdef ESP_PLATFORM
+#include "sdkconfig.h"
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -211,10 +214,25 @@ static size_t escape_some(const char **src, char *out, size_t cap)
     return o;
 }
 
+#if CONFIG_TRIGGR_TEXT_CHAT
+/* Triggr observes the same typed-turn events that are printed to the console. */
+extern void triggr_chat_event(const char *type, const char *text, const char *fields);
+#endif
+
 /* Each line goes out in one write, so other tasks' log lines land between lines, not inside them. */
 void muse_hatch_console(const char *type, const char *text, const char *fields, ...)
 {
     static unsigned seq;
+#if CONFIG_TRIGGR_TEXT_CHAT
+    char event_fields[160] = {0};
+    if (fields) {
+        va_list args;
+        va_start(args, fields);
+        vsnprintf(event_fields, sizeof(event_fields), fields, args);
+        va_end(args);
+    }
+    triggr_chat_event(type, text, event_fields);
+#endif
     char line[CONSOLE_LINE];
     do {
         size_t n = snprintf(line, sizeof(line), "@chat {\"seq\":%u,\"type\":\"%s\"",
