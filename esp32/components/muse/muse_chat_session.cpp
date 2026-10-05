@@ -798,6 +798,11 @@ static bool resolve_vm(char *err, size_t err_cap)
     return false;
 }
 
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+#include "muse_chat_route.h"
+static unsigned s_route_logs;
+#endif
+
 static bool open_subscription(void)
 {
     s_last_seq = 0;
@@ -1173,6 +1178,13 @@ static void send_chat(const char *text, const char *modality)
     cJSON *body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "message", text);
     cJSON_AddStringToObject(body, "output_modality", modality);
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    if (s_turn.text && !muse_chat_add_session(body, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID)) {
+        cJSON_Delete(body);
+        turn_fail("INVALID SIDE CHAT CONFIGURATION");
+        return;
+    }
+#endif
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
     size_t len = json ? strlen(json) : 0;
@@ -1221,6 +1233,10 @@ static void text_begin(const char *text)
     if (!turn_start(0, true)) {
         return;
     }
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    s_route_logs = 0;
+    ESP_LOGI(TAG, "side-chat probe session=%s (subscription scope unchanged)", CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID);
+#endif
     ESP_LOGI(TAG, "typed turn: %u bytes", (unsigned)strlen(text));
     send_chat(text, "text");
     if (s_turn.phase == P_WAIT_REPLY) {
@@ -1404,6 +1420,24 @@ static void on_event(cJSON *line)
     if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
         return;   /* the subscription ack */
     }
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    if (s_turn.text && s_turn.phase == P_WAIT_REPLY) {
+        cJSON *payload = cJSON_GetObjectItem(line, "payload");
+        const char *parent = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "reply_to_message_id"));
+        if (!parent) parent = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "parent_message_id"));
+        const char *id = msg_id(payload, line);
+        bool known = (parent && parent[0] && s_turn.acked &&
+                      (is_user_id(parent) || find_msg(parent) >= 0)) ||
+                     (id && find_msg(id) >= 0);
+        bool accepted = muse_chat_route_accept(line, payload, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID, known);
+        if (s_route_logs++ < 16) {
+            ESP_LOGI(TAG, "side-chat route: envelope_session=%d payload_session=%d parent=%d known=%d accepted=%d",
+                     cJSON_HasObjectItem(line, "session_id"), cJSON_HasObjectItem(payload, "session_id"),
+                     parent && parent[0], known, accepted);
+        }
+        if (!accepted) return;
+    }
+#endif
     cJSON *seq = cJSON_GetObjectItem(line, "seq");
     if (cJSON_IsNumber(seq)) {
         int64_t v = (int64_t)seq->valuedouble;

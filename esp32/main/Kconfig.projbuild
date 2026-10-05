@@ -23,6 +23,23 @@ menu "ESP32 Device SDK"
             or audio hardware. Single-press pairing and long-hold reset remain.
 
 
+    config TRIGGR_SIDE_CHAT_PROBE
+        bool "Triggr dedicated-chat receipt-only probe"
+        depends on TRIGGR_TEXT_CHAT
+        default n
+        help
+            Experimental side-chat routing. Sends version-1 receipt probes only;
+            activity logging is disabled. No fallback or automatic resend.
+
+    config TRIGGR_SIDE_CHAT_SESSION_ID
+        string "Triggr probe chat session ID (reuse across builds)"
+        depends on TRIGGR_SIDE_CHAT_PROBE
+        default ""
+        help
+            Set one UUID for this gadget's dedicated chat. Keep it unchanged
+            across restarts. Empty/invalid IDs fail closed rather than using
+            the main chat. This identifier is not a credential.
+
     config GADGET_PRODUCT_NAME
         string "Human-visible product name for log messages"
         default "Muse Gadget"
