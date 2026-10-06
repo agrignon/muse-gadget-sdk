@@ -856,8 +856,27 @@ static bool send_probe(const char *json)
 static bool open_subscription(void)
 {
     s_last_seq = 0;
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+    // Controlled experiment: send and subscribe request the same session.
+    // The SDK does not establish this subscription field's server contract.
+    // HTTP acceptance is insufficient; retain event filtering and require the
+    // exact correlated receipt before claiming a working return path.
+    cJSON *body = cJSON_CreateObject();
+    if (!muse_chat_add_session(body, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID)) {
+        cJSON_Delete(body);
+        return false;
+    }
+    char *json = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!json) return false;
+    ESP_LOGI(TAG, "side-chat subscription: requesting configured session (experimental)");
+    s_conn.sub_id = open_stream(K_SUB, "POST", "/chat/subscribe", "application/json", "application/x-ndjson", json,
+                                true);
+    cJSON_free(json);
+#else
     s_conn.sub_id = open_stream(K_SUB, "POST", "/chat/subscribe", "application/json", "application/x-ndjson", "{}",
                                 true);
+#endif
     return s_conn.sub_id != 0;
 }
 
@@ -1305,7 +1324,7 @@ static void text_begin(const char *text)
     }
 #if CONFIG_TRIGGR_SIDE_CHAT_PROBE
     s_route_logs = 0;
-    ESP_LOGI(TAG, "side-chat probe session=%s (registered gadget send; subscription unchanged)", CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID);
+    ESP_LOGI(TAG, "side-chat probe session=%s (registered gadget send; session-scoped subscription experiment)", CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID);
 #endif
     ESP_LOGI(TAG, "typed turn: %u bytes", (unsigned)strlen(text));
     send_chat(text, "text");
@@ -1953,6 +1972,11 @@ static bool on_frame(const DecodedServiceFrame &f)
     switch (f.kind) {
     case ServiceFrameKind::Response:
         s->status = f.response.status;
+#if CONFIG_TRIGGR_SIDE_CHAT_PROBE
+        if (s->kind == K_SUB) {
+            ESP_LOGI(TAG, "side-chat subscription: HTTP %d (scope not verified)", s->status);
+        }
+#endif
         if (f.response.status >= 400) {
             return on_http_error(s, f.response);
         }
