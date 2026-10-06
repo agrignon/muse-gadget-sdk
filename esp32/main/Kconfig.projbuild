@@ -24,16 +24,27 @@ menu "ESP32 Device SDK"
 
 
     config TRIGGR_SIDE_CHAT_PROBE
-        bool "Triggr dedicated-chat receipt-only probe"
+        bool "Triggr dedicated-chat routing (receipt-only by default)"
         depends on TRIGGR_TEXT_CHAT
         default n
         help
             Experimental side-chat routing on the registered gadget connection.
-            Sends version-1 receipt probes only;
-            activity logging is disabled. No fallback or automatic resend.
+            Defaults to version-1 receipt probes. Enable activity logging below
+            only after verifying the existing Muse store in the dedicated chat.
+            No fallback or automatic resend.
+
+    config TRIGGR_SIDE_CHAT_ACTIVITY
+        bool "Log Triggr activity in the dedicated chat (version 2)"
+        depends on TRIGGR_SIDE_CHAT_PROBE
+        default n
+        help
+            Send version-2 events over the verified dedicated-chat transport.
+            Requires the installed Muse skill and the SAME existing activity
+            database. Never initialize a replacement store during migration.
+            Disable this option to return to receipt-only side-chat tests.
 
     config TRIGGR_SIDE_CHAT_SESSION_ID
-        string "Triggr probe chat session ID (reuse across builds)"
+        string "Triggr chat session ID (reuse across builds)"
         depends on TRIGGR_TEXT_CHAT
         default ""
         help
