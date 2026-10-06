@@ -1511,6 +1511,9 @@ static void on_event(cJSON *line)
                      muse_chat_session_state(payload, CONFIG_TRIGGR_SIDE_CHAT_SESSION_ID),
                      id != nullptr, parent && parent[0], known, accepted, stale, parent_other,
                      s_turn.nmsgs == MAX_MSGS);
+            char schema[768];
+            muse_chat_schema(payload, schema, sizeof(schema));
+            ESP_LOGI(TAG, "side-chat schema: event=%s payload={%s}", muse_chat_event_kind(line), schema);
             if (s_route_logs == 64) ESP_LOGI(TAG, "side-chat route: diagnostic limit reached");
         }
         if (!accepted) return;

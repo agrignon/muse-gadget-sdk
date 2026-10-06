@@ -42,7 +42,17 @@ int main() {
     assert(!strcmp(muse_chat_event_kind(event),"delta.message_done"));
     cJSON_Delete(event);
     event=cJSON_Parse("{\"event\":\"private arbitrary value\"}");
-    assert(!strcmp(muse_chat_event_kind(event),"other"));
+    assert(!strcmp(muse_chat_event_kind(event),"invalid-name"));
+    cJSON_Delete(event);
+    event=cJSON_Parse("{\"event\":\"new.protocol_event\",\"payload\":{\"session_id\":\"secret-session-value\",\"message\":{\"content\":\"secret-chat-text\",\"role\":\"assistant\"},\"items\":[\"secret-array-value\"]}}");
+    assert(!strcmp(muse_chat_event_kind(event),"new.protocol_event"));
+    char schema[768];
+    muse_chat_schema(cJSON_GetObjectItem(event,"payload"),schema,sizeof(schema));
+    assert(!strcmp(schema,"session_id:string,message:object(content:string,role:string),items:array"));
+    assert(!strstr(schema,"secret"));
+    char small[5];
+    muse_chat_schema(event,small,sizeof(small));
+    assert(small[4]==0);
     cJSON_Delete(event);
     check("{}",false,false);             // no guessed subscription scope
     check("{}",true,true);               // known message/parent can correlate
